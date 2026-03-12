@@ -1,0 +1,4 @@
+neo4j
+mcp
+streamlit
+google-generativeai
