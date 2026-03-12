@@ -13,7 +13,9 @@ URI = "bolt://localhost:7687"
 AUTH = ("neo4j", "password")
 
 # 2. Configure Gemini API
-API_KEY = "AIzaSyAZM55eLmJ7BPrsRooYC2PXynnIdEd8-lg"
+API_KEY = os.environ.get("GEMINI_API_KEY")
+if not API_KEY:
+    st.error("GEMINI_API_KEY environment variable not set. Please set it in a .env file.")
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel("gemini-3.1-flash-lite-preview")
 
