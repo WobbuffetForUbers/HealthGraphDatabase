@@ -17,12 +17,16 @@
 
 ## 3. Intelligent Visualization Engine (UI Upgrade)
 - **Concept**: AI-driven translation of raw database records into clinical insights.
-- **Visualization Agent**: Uses Gemini to analyze query results and automatically select the most relevant Streamlit chart (Bar, Line, or Area).
-- **Clinical Interpretation**: Every visualization includes:
-    - **Findings**: A concise (2-sentence) clinical summary of the data trends.
-    - **Rationale**: A brief explanation of why the specific visualization was chosen for that QI question.
+- **Visualization Agent**: Uses Gemini to analyze query results and automatically select the most relevant Streamlit chart (Bar, Line, Area, or Scatter).
+- **Clinical Interpretation**: Every visualization includes findings summaries and rationales.
 
-## 4. MCP Server (Model Context Protocol)
+## 4. Agentic Query Refinement & Self-Correction
+- **Clarity Check**: The assistant evaluates every request for clinical specificity before execution, ensuring conditions and processes are clearly identified.
+- **Iterative Healing**: Automatically analyzes Neo4j syntax errors and regenerates corrected queries (up to 3 attempts).
+- **Longitudinal Joining Strategy**: If direct encounter-to-condition links are missing, the system pivots to a date-based join between Patients and their active Conditions to capture the full clinical context of chronic illness stays.
+- **Strategy Adaptation**: Automatically switches from strict equality filters to flexible regex matches and broader longitudinal joins if initial data retrieval fails.
+
+## 5. MCP Server (Model Context Protocol)
 - **Standardized Access**: Provides a unified interface for LLMs to interact with the clinical ecosystem.
 - **Tools**:
     - `run_cypher`: Direct execution of queries against the graph.

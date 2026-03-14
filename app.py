@@ -44,14 +44,12 @@ def run_query(cypher_query):
 
 def search_guidelines(query):
     try:
-        # Embed Query
         embedding = genai.embed_content(
             model="models/text-embedding-004",
             content=query,
             task_type="retrieval_query"
         )['embedding']
 
-        # Vector Search
         search_body = {
             "size": 3,
             "query": {
@@ -69,7 +67,34 @@ def search_guidelines(query):
     except:
         return []
 
-def generate_cypher(prompt, context=""):
+def check_clarity(prompt):
+    """Checks if the clinical request is clear enough for Cypher generation."""
+    clarity_prompt = f"""
+    Analyze this clinical quality improvement request: "{prompt}"
+    
+    TASK:
+    Determine if this request can be converted into a clinical database query.
+    
+    RULES:
+    - If a specific clinical condition (e.g., "heart failure", "diabetes") is mentioned, it is CLEAR.
+    - If a specific care process (e.g., "admissions", "boarding", "medications") is mentioned, it is CLEAR.
+    - Only return is_clear: false if the prompt is a single word or completely nonsensical.
+    - If in doubt, set is_clear: true.
+    
+    Return ONLY JSON:
+    {{
+        "is_clear": true/false,
+        "question": "..."
+    }}
+    """
+    try:
+        response = model.generate_content(clarity_prompt)
+        return json.loads(response.text.strip().replace("```json", "").replace("```", ""))
+    except:
+        return {"is_clear": True, "question": ""}
+
+def generate_cypher(prompt, context="", error_feedback=""):
+    """Generates Cypher, optionally incorporating previous error feedback."""
     system_prompt = f"""
     You are an expert Clinical Data Scientist and Cypher expert. 
     
@@ -88,15 +113,17 @@ def generate_cypher(prompt, context=""):
     - (e)-[:DIAGNOSED_WITH]->(c), (e)-[:MEDICATION_ORDERED]->(m), (e)-[:PERFORMED_BY]->(pr)
 
     QUERY STRATEGIES:
-    1. Clinical Context Join: When asked about encounters for a specific condition (e.g., "admitted for heart failure"), ALWAYS join the Encounter to its Condition. The Encounter description is often generic, while the diagnosis is in the Condition node.
-       Example: MATCH (e:Encounter)-[:DIAGNOSED_WITH]->(c:Condition) WHERE c.description =~ '(?i).*heart failure.*'
-    2. Case-Insensitivity: Clinical descriptions are mixed case. ALWAYS use case-insensitive matching (e.g., `WHERE c.description =~ '(?i).*heart failure.*'`).
-    3. Multi-Hop: For transitions, match two encounters for same patient where e2.start > e1.stop. 
-    4. Property Names: Always use `m.total_cost` for medication expenditures.
+    1. Longitudinal Chronic Conditions: For chronic conditions (like Heart Failure), join the Patient to their active Conditions based on date ranges.
+       Logic: `MATCH (p)-[:HAS_CONDITION]->(c) WHERE c.description =~ '(?i)...' MATCH (p)-[:HAS_ENCOUNTER]->(e) WHERE datetime(e.start) >= datetime(c.start) AND (c.stop IS NULL OR datetime(e.start) <= datetime(c.stop))`
+    2. Join Strategy: Try both direct `[:DIAGNOSED_WITH]` links AND the longitudinal date-based strategy above to find all relevant encounters.
+    3. Case-Insensitivity: ALWAYS use `(?i)` regex or `toLower()`.
+    4. Property Names: Always use `m.total_cost` for medications.
+
+    PREVIOUS ERROR/RESULT FEEDBACK:
+    {error_feedback}
 
     RULES:
     - NO APOC. Use native functions only.
-    - Variable Scope: Carry over all variables needed for subsequent clauses in `WITH`.
     - Return ONLY the raw Cypher query. No markdown, no explanations.
     """
     response = model.generate_content(f"{system_prompt}\n\nUser request: {prompt}")
@@ -174,32 +201,46 @@ if prompt := st.chat_input("Ask about hospital capacity, patient flow, or clinic
     st.session_state.messages.append({"role": "user", "content": prompt})
 
     with st.chat_message("assistant"):
-        # STEP 1: RAG Search
-        with st.spinner("Searching Clinical Guidelines..."):
-            guidelines = search_guidelines(prompt)
-            context_str = "\n".join([f"Source: {g['source']}\nContent: {g['text']}" for g in guidelines])
-            if guidelines:
-                with st.expander("📚 Referenced Guidelines", expanded=False):
-                    for g in guidelines:
-                        st.markdown(f"**Source:** {g['source']}")
-                        st.write(g['text'][:500] + "...")
-        
-        # STEP 2: Generate & Run Cypher
-        with st.spinner("Analyzing Clinical Data..."):
-            cypher = generate_cypher(prompt, context_str)
-            st.code(cypher, language="cypher")
-            results = run_query(cypher)
+        # 1. Clarity Check
+        clarity = check_clarity(prompt)
+        if not clarity["is_clear"]:
+            response = clarity["question"]
+            st.markdown(response)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+        else:
+            # 2. RAG Search
+            with st.spinner("Searching Clinical Guidelines..."):
+                guidelines = search_guidelines(prompt)
+                context_str = "\n".join([f"Source: {g['source']}\nContent: {g['text']}" for g in guidelines])
+                if guidelines:
+                    with st.expander("📚 Referenced Guidelines", expanded=False):
+                        for g in guidelines:
+                            st.markdown(f"**Source:** {g['source']}")
+                            st.write(g['text'][:500] + "...")
             
-            if isinstance(results, str) and results.startswith("Error"):
-                st.error(results)
-                response = "Error executing clinical query."
-            elif not results:
-                response = "No clinical records matched that criteria."
-            else:
+            # 3. Iterative Generation Loop
+            results = None
+            cypher = ""
+            error_feedback = ""
+            
+            for attempt in range(3): # Max 3 iterations
+                with st.spinner(f"Analyzing Data (Attempt {attempt+1})..." if attempt > 0 else "Analyzing Clinical Data..."):
+                    cypher = generate_cypher(prompt, context_str, error_feedback)
+                    st.code(cypher, language="cypher")
+                    results = run_query(cypher)
+                    
+                    if isinstance(results, list) and len(results) > 0:
+                        break # Success!
+                    elif isinstance(results, list) and len(results) == 0:
+                        error_feedback = f"The query returned 0 results. Perhaps the filters were too strict or the terms didn't match. Try a broader search (e.g., using longitudinal condition matching or patient-medication links directly)."
+                    else:
+                        error_feedback = f"The query failed with error: {results}. Please fix the syntax or relationship mapping."
+            
+            # 4. Process Results
+            if isinstance(results, list) and len(results) > 0:
                 df = pd.DataFrame(results)
                 st.dataframe(df, use_container_width=True)
                 
-                # STEP 3: Knowledge-Grounded Visualization & Interpretation
                 viz = get_viz_recommendation(prompt, df, context_str)
                 if viz.get("type") != "none":
                     findings = viz.get("findings", "Trends analyzed.")
@@ -213,14 +254,15 @@ if prompt := st.chat_input("Ask about hospital capacity, patient flow, or clinic
                         elif viz["type"] == "area_chart": st.area_chart(chart_data[viz["value"]])
                         elif viz["type"] == "scatter_chart": st.scatter_chart(chart_data[viz["value"]])
                     except: pass
+                response = "Analysis complete based on database records and handbook protocols."
+            else:
+                response = "I was unable to retrieve valid data after several attempts. Could you please refine your request or provide more specific terms?"
 
-                response = f"Analysis complete based on database records and handbook protocols."
-
-        st.markdown(response)
-        st.session_state.messages.append({
-            "role": "assistant", 
-            "content": response, 
-            "data": df if 'df' in locals() else None,
-            "viz": viz if 'viz' in locals() else {"type": "none"},
-            "query": cypher
-        })
+            st.markdown(response)
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": response, 
+                "data": df if 'df' in locals() and results else None,
+                "viz": viz if 'viz' in locals() and results else {"type": "none"},
+                "query": cypher
+            })
