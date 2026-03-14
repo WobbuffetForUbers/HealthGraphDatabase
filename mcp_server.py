@@ -3,8 +3,10 @@ from neo4j import GraphDatabase
 import google.generativeai as genai
 from opensearchpy import OpenSearch
 import os
+from dotenv import load_dotenv
 
 # 1. Initialize the MCP Server
+load_dotenv()
 mcp = FastMCP("ClinicalQI")
 
 # 2. Database connection credentials

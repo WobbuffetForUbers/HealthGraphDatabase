@@ -2,3 +2,9 @@ neo4j
 mcp
 streamlit
 google-generativeai
+opensearch-py
+pypdf
+beautifulsoup4
+requests
+playwright
+python-dotenv

@@ -1,2 +1,9 @@
 # Environment Variables
 .env
+
+# Isolated Tools (Scrapers, Debugging)
+tools/
+
+# Data Archives
+guidelines/
+neo4j_import/
